@@ -1,14 +1,22 @@
-version: '3.7'
+#version: '3.7'
 services:
   auto-m4b:
-    #image: seanap/auto-m4b
-    build: .
-    container_name: auto-m4b
+    image: auto-m4b-forked
+    container_name: myrison-m4b-forked
     volumes:
-      - ./config:/config
-      - ./temp:/temp
+      - /mnt/docker/myrison-m4b/config:/config
+      - /mnt/asano/backup/mediaserver/usenet/complete/audiobooks/myrison/temp:/temp
+      - /home/jason/Documents/scripts/auto-m4b/auto-m4b-tool.sh:/auto-m4b-tool.sh
+      - /home/jason/Documents/scripts/auto-m4b/runscript.sh:/etc/service/bot/run
+
     environment:
-      - PUID=1000
-      - PGID=1000
-      - CPU_CORES=2
-      - MAKE_BACKUP=N
+#      - PUID=1000
+#      - PGID=1000
+      - SLEEPTIME=60m
+      - MAKE_BACKUP=Y
+#      All cores used by default unless limited by line below
+#      - CPU_CORES=6
+networks:
+  default:
+    external: true
+    name: traefik-network

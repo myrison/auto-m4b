@@ -24,6 +24,14 @@ userid="$(id -u $username)"
 groupid="$(id -g $username)"
 chown -R $userid:$groupid /temp
 
+# Debugging: Log environment and permissions
+echo "Running as user: $(whoami)"
+echo "User ID: $(id -u)"
+echo "Group ID: $(id -g)"
+echo "Directory permissions:"
+ls -ld "$inputfolder"
+ls -ld "$originalfolder"
+
 # Adjust the number of cores depending on the ENV CPU_CORES
 if [ -z "$CPU_CORES" ]; then
   echo "Using all CPU cores as none other defined."
@@ -42,43 +50,32 @@ else
   sleeptime="$SLEEPTIME"
 fi
 
+# Change to the merge folder, keeps this clear and the script could be kept inside the container
+cd "$inputfolder" || return
+
 # Function to move folders with multiple audio files and log the details
 move_folders_with_multiple_files() {
   folders_moved=()
-  echo "Searching for new audio files in $originalfolder"
-  find "$originalfolder" -maxdepth 2 -mindepth 2 -type f \( -name '*.mp3' -o -name '*.m4b' -o -name '*.m4a' \) -print0 | xargs -0 -L 1 dirname | sort | uniq -c | grep -E -v '^ *1 ' | sed 's/^ *[0-9]* //' | uniq -z > found_dirs.txt
   while IFS= read -r -d '' dir; do
-    dir=$(echo "$dir" | xargs)  # Trim leading/trailing whitespace
-    echo "Attempting to move original directory named '$dir' to input folder named '$inputfolder' for processing"
-    if [ -d "$dir" ]; then
-      if mv "$dir" "$inputfolder"; then
-        folders_moved+=("$dir")
-      else
-        echo "Failed to move '$dir' to '$inputfolder'"
-      fi
-    else
-      echo "Directory '$dir' does not exist."
-    fi
-  done < found_dirs.txt  #this writes the list of files found by this process
+    echo "Attempting to move $dir to $inputfolder"
+    mv -v "$dir" "$inputfolder" && folders_moved+=("$dir") || echo "Failed to move $dir to $inputfolder"
+  done < <(find "$originalfolder" -maxdepth 2 -mindepth 2 -type f \( -name '*.mp3' -o -name '*.m4b' -o -name '*.m4a' \) -print0 | xargs -0 -L 1 dirname | sort | uniq -c | grep -E -v '^ *1 ' | sed 's/^ *[0-9]* //' | uniq -z)
 
   if [ ${#folders_moved[@]} -eq 0 ]; then
     echo "No new folders with multiple audio files found."
   else
     echo "Moving folders with 2 or more audio files to $inputfolder:"
     for folder in "${folders_moved[@]}"; do
-      echo "Moved folder: '$folder'"
+      echo "Moved folder: $folder"
       find "$folder" -type f \( -name '*.mp3' -o -name '*.m4b' -o -name '*.m4a' \)
     done
   fi
 }
 
-echo "* * * * * * * * * * * * * * * * * * * * * *"
-echo "Sleep time expired, checking for new files."
-
 # Run indefinitely with sleep intervals
 while true; do
 
-  # Copy files to backup destination before any manipulation
+  # Copy files to backup destination
   if [ "$MAKE_BACKUP" == "N" ]; then
     echo "Skipping making a backup"
   else
@@ -86,11 +83,8 @@ while true; do
     cp -Ru "$originalfolder"* $backupfolder
   fi
 
-  # Change to the original folder to correctly read from it
-  cd "$originalfolder" || return
-
   # Make sure all single file mp3's & m4b's are in their own folder
-  echo "Making sure all books in $originalfolder are in their own folders"
+  echo "Making sure all books are in their own folder"
   for file in "$originalfolder"*.{m4b,mp3}; do
     if [[ -f "$file" ]]; then
       mkdir "${file%.*}"
@@ -112,6 +106,8 @@ while true; do
   if [ -n "$nested_folders" ]; then
     echo "Nested subfolders cannot be auto-processed, moving to $fixitfolder to adjust manually."
     echo "$nested_folders" | while read j; do mv -v "$originalfolder$j" $fixitfolder; done
+  else
+    echo "No nested subfolders found."
   fi
 
   # Move single file mp3's to inputfolder
@@ -135,11 +131,8 @@ while true; do
   # Clear the folders
   rm -r "$binfolder"* 2>/dev/null
 
-  # Doing all scanning for files to process from /merge folder
-  cd "$inputfolder" || return
-
   if ls -d */ 2>/dev/null; then
-    echo "The folder above was detected for conversion"
+    echo Folder Detected
     for book in *; do
       if [ -d "$book" ]; then
         mpthree=$(find "$book" -maxdepth 2 -type f \( -name '*.mp3' -o -name '*.m4b' \) | head -n 1)
@@ -147,11 +140,11 @@ while true; do
         logfile="$outputfolder$book/$book$logend"
         chapters=$(ls "$inputfolder$book"/*chapters.txt 2> /dev/null | wc -l)
         if [ "$chapters" != "0" ]; then
-          echo "Merging chapters file found in directory named "$book" into media file."
-          mp4chaps -i "$inputfolder$book"/*$m4bend
+          echo Adjusting Chapters
+          mp4chaps -i "$inputfolder$book/chapters.txt" "$inputfolder$book"/*$m4bend
           mv "$inputfolder$book" "$outputfolder"
         else
-          echo "Files found for processing, sampling $mpthree"
+          echo Sampling $mpthree
           bit=$(ffprobe -hide_banner -loglevel 0 -of flat -i "$mpthree" -select_streams a -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1)
           echo Bitrate = $bit
           echo The folder "$book" will be merged to "$m4bfile"
@@ -159,7 +152,7 @@ while true; do
           m4b-tool merge "$book" -n -q --audio-bitrate="$bit" --skip-cover --use-filenames-as-chapters --no-chapter-reindexing --audio-codec=libfdk_aac --jobs="$CPUcores" --output-file="$m4bfile" --logfile="$logfile"
           mv "$inputfolder$book" "$binfolder"
         fi
-        echo "SUCCESS: Conversion Completed"
+        echo Finished Converting
         # Make sure all single file m4b's are in their own folder
         echo Putting the m4b into a folder
         for file in $outputfolder*.m4b; do
@@ -168,11 +161,11 @@ while true; do
             mv "$file" "${file%.*}"
           fi
         done
+        echo Deleting duplicate mp3 audiobook folder
       fi
     done
   else
-    echo Script complete,next run in $sleeptime min...
+    echo No folders detected, next run $sleeptime min...
     sleep $sleeptime
   fi
 done
-
