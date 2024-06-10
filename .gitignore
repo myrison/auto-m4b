@@ -1,0 +1,8 @@
+# Ignore all .log files
+*.log
+
+# Ignore all older file versions
+older-versions/
+
+# Ignore all .env files
+.env
