@@ -72,30 +72,6 @@ move_folders_with_multiple_files() {
   fi
 }
 
-# Function to move folders with single m4b files and log the details
-move_single_m4b_folders() {
-  single_m4b_dirs=()
-  echo "Searching for single file m4b's in $originalfolder"
-  find "$originalfolder" -maxdepth 2 -type f \( -iname \*.m4b -o -iname \*.mp4 -o -iname \*.m4a -o -iname \*.ogg \) -printf "%h\0" | tr '\0' '\n' | sort -u | while read -r dir; do
-    dir=$(echo "$dir" | xargs)  # Trim leading/trailing whitespace
-    echo "Checking directory: '$dir'"
-    if [ -d "$dir" ]; then
-      single_m4b_dirs+=("$dir")
-      echo "Single m4b found in directory: '$dir'.  Moving directory to '$outputfolder'"
-      mv "$dir" "$outputfolder"
-    fi
-  done
-
-  if [ ${#single_m4b_dirs[@]} -eq 0 ]; then
-    echo "No single m4b files found to move."
-  else
-    echo "Moved single m4b directories to $outputfolder:"
-    for dir in "${single_m4b_dirs[@]}"; do
-      echo "Moved directory: '$dir'"
-    done
-  fi
-}
-
 echo "* * * * * * * * * * * * * * * * * * * * * *"
 echo "Sleep time expired, checking for new files."
 
@@ -155,8 +131,16 @@ while true; do
     echo "No single file mp3 files found to move."
   fi
 
-  # Move single file m4b's to outputfolder
-  move_single_m4b_folders
+  # Moving the single m4b files to the untagged folder as no Merge needed
+  single_m4b=$(find "$originalfolder" -maxdepth 2 -type f \( -iname \*.m4b -o -iname \*.mp4 -o -iname \*.m4a -o -iname \*.ogg \) -printf "%h\0")
+  if [ -n "$single_m4b" ]; then
+    echo "Finding single file m4b's in $originalfolder"
+    echo "Single m4b directories found:"
+    echo "$single_m4b" | xargs -0 -I {} echo "Checking directory: '{}'"
+    echo "$single_m4b" | xargs -0 -I {} mv "{}" "$outputfolder"
+  else
+    echo "No single m4b files found to move."
+  fi
 
   # Clear the folders
   rm -r "$binfolder"* 2>/dev/null

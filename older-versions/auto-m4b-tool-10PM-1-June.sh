@@ -46,20 +46,20 @@ fi
 move_folders_with_multiple_files() {
   folders_moved=()
   echo "Searching for new audio files in $originalfolder"
-  find "$originalfolder" -maxdepth 2 -mindepth 2 -type f \( -name '*.mp3' -o -name '*.m4b' -o -name '*.m4a' \) -print0 | xargs -0 -I {} dirname "{}" | sort | uniq -c | awk '$1 > 1 {print substr($0, index($0,$2))}' | while read -r dir; do
+  find "$originalfolder" -maxdepth 2 -mindepth 2 -type f \( -name '*.mp3' -o -name '*.m4b' -o -name '*.m4a' \) -print0 | xargs -0 -L 1 dirname | sort | uniq -c | grep -E -v '^ *1 ' | sed 's/^ *[0-9]* //' | uniq -z > found_dirs.txt
+  while IFS= read -r -d '' dir; do
     dir=$(echo "$dir" | xargs)  # Trim leading/trailing whitespace
     echo "Attempting to move original directory named '$dir' to input folder named '$inputfolder' for processing"
     if [ -d "$dir" ]; then
       if mv "$dir" "$inputfolder"; then
         folders_moved+=("$dir")
-        echo "Moved folder: '$dir' to '$inputfolder'"
       else
         echo "Failed to move '$dir' to '$inputfolder'"
       fi
     else
       echo "Directory '$dir' does not exist."
     fi
-  done
+  done < found_dirs.txt  #this writes the list of files found by this process
 
   if [ ${#folders_moved[@]} -eq 0 ]; then
     echo "No new folders with multiple audio files found."
@@ -72,30 +72,6 @@ move_folders_with_multiple_files() {
   fi
 }
 
-# Function to move folders with single m4b files and log the details
-move_single_m4b_folders() {
-  single_m4b_dirs=()
-  echo "Searching for single file m4b's in $originalfolder"
-  find "$originalfolder" -maxdepth 2 -type f \( -iname \*.m4b -o -iname \*.mp4 -o -iname \*.m4a -o -iname \*.ogg \) -printf "%h\0" | tr '\0' '\n' | sort -u | while read -r dir; do
-    dir=$(echo "$dir" | xargs)  # Trim leading/trailing whitespace
-    echo "Checking directory: '$dir'"
-    if [ -d "$dir" ]; then
-      single_m4b_dirs+=("$dir")
-      echo "Single m4b found in directory: '$dir'.  Moving directory to '$outputfolder'"
-      mv "$dir" "$outputfolder"
-    fi
-  done
-
-  if [ ${#single_m4b_dirs[@]} -eq 0 ]; then
-    echo "No single m4b files found to move."
-  else
-    echo "Moved single m4b directories to $outputfolder:"
-    for dir in "${single_m4b_dirs[@]}"; do
-      echo "Moved directory: '$dir'"
-    done
-  fi
-}
-
 echo "* * * * * * * * * * * * * * * * * * * * * *"
 echo "Sleep time expired, checking for new files."
 
@@ -103,15 +79,11 @@ echo "Sleep time expired, checking for new files."
 while true; do
 
   # Copy files to backup destination before any manipulation
-  if [ "$(ls -A $originalfolder)" ]; then
-    if [ "$MAKE_BACKUP" == "N" ]; then
-      echo "Skipping making a backup"
-    else
-      echo "Making a backup of the whole $originalfolder"
-      cp -Ru "$originalfolder"* $backupfolder
-    fi
+  if [ "$MAKE_BACKUP" == "N" ]; then
+    echo "Skipping making a backup"
   else
-    echo "No files to backup in $originalfolder, skipping backups."
+    echo "Making a backup of the whole $originalfolder"
+    cp -Ru "$originalfolder"* $backupfolder
   fi
 
   # Change to the original folder to correctly read from it
@@ -126,7 +98,7 @@ while true; do
     fi
   done
 
-  # Move folders with multiple audio files to inputfolder
+  # Move folders with multiple audiofiles to inputfolder
   move_folders_with_multiple_files
 
   # Move folders with nested subfolders to fixitfolder for manual fixing
@@ -140,33 +112,34 @@ while true; do
   if [ -n "$nested_folders" ]; then
     echo "Nested subfolders cannot be auto-processed, moving to $fixitfolder to adjust manually."
     echo "$nested_folders" | while read j; do mv -v "$originalfolder$j" $fixitfolder; done
-  else
-    echo "No nested subfolders found."
   fi
 
   # Move single file mp3's to inputfolder
   single_mp3s=$(find "$originalfolder" -maxdepth 2 -type f \( -name '*.mp3' \) -printf "%h\0")
   if [ -n "$single_mp3s" ]; then
-    echo "Finding single file mp3's in $originalfolder"
-    echo "Single MP3 directories found:"
-    echo "$single_mp3s" | xargs -0 -I {} echo "Checking directory: '{}'"
-    echo "$single_mp3s" | xargs -0 -I {} mv "{}" "$inputfolder"
+    echo "Moving single file mp3's to $inputfolder "
+    echo "$single_mp3s" | xargs -0 mv -t "$inputfolder"
   else
     echo "No single file mp3 files found to move."
   fi
 
-  # Move single file m4b's to outputfolder
-  move_single_m4b_folders
+  # Moving the single m4b files to the untagged folder as no Merge needed
+  single_m4b=$(find "$originalfolder" -maxdepth 2 -type f \( -iname \*.m4b -o -iname \*.mp4 -o -iname \*.m4a -o -iname \*.ogg \) -printf "%h\0")
+  if [ -n "$single_m4b" ]; then
+    echo "Moving all the single m4b books to $outputfolder "
+    echo "$single_m4b" | xargs -0 mv -t "$outputfolder"
+  else
+    echo "No single file m4b files found to move."
+  fi
 
   # Clear the folders
   rm -r "$binfolder"* 2>/dev/null
 
   # Doing all scanning for files to process from /merge folder
   cd "$inputfolder" || return
-  echo "Scanning for folders ready for conversion."
 
   if ls -d */ 2>/dev/null; then
-    echo "Preparing to convert the folder(s) identified above."
+    echo "The folder above was detected for conversion"
     for book in *; do
       if [ -d "$book" ]; then
         mpthree=$(find "$book" -maxdepth 2 -type f \( -name '*.mp3' -o -name '*.m4b' \) | head -n 1)
@@ -175,7 +148,6 @@ while true; do
         chapters=$(ls "$inputfolder$book"/*chapters.txt 2> /dev/null | wc -l)
         if [ "$chapters" != "0" ]; then
           echo "Merging chapters file found in directory named "$book" into media file."
-          echo "Running command: mp4chaps -i "$inputfolder$book"/*$m4bend"
           mp4chaps -i "$inputfolder$book"/*$m4bend
           mv "$inputfolder$book" "$outputfolder"
         else
@@ -187,7 +159,7 @@ while true; do
           m4b-tool merge "$book" -n -q --audio-bitrate="$bit" --skip-cover --use-filenames-as-chapters --no-chapter-reindexing --audio-codec=libfdk_aac --jobs="$CPUcores" --output-file="$m4bfile" --logfile="$logfile"
           mv "$inputfolder$book" "$binfolder"
         fi
-        echo "**** **** **** SUCCESS: Conversion Completed **** **** ****"
+        echo "SUCCESS: Conversion Completed"
         # Make sure all single file m4b's are in their own folder
         echo Putting the m4b into a folder
         for file in $outputfolder*.m4b; do
@@ -199,7 +171,7 @@ while true; do
       fi
     done
   else
-    echo Script complete, next run in $sleeptime min...
+    echo Script complete,next run in $sleeptime min...
     sleep $sleeptime
   fi
 done
